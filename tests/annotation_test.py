@@ -540,6 +540,7 @@ class AnnotatorTest(absltest.TestCase):
         max_char_buffer=40,
         batch_length=1,
         resolver=resolver,
+        enable_fuzzy_alignment=False,
     )
     self.assertDataclassEqual(expected_annotated_text, actual_annotated_text)
     self.assert_char_interval_match_source(
@@ -550,9 +551,11 @@ class AnnotatorTest(absltest.TestCase):
             batch_prompts=[
                 "\n\nQ: Patient takes one Aspirin for headaches.\nA: "
             ],
+            enable_fuzzy_alignment=False,
         ),
         mock.call(
             batch_prompts=["\n\nQ: Pt has fever.\nA: "],
+            enable_fuzzy_alignment=False,
         ),
     ])
 

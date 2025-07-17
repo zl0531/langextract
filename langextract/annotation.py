@@ -364,6 +364,7 @@ class Annotator:
             chunk_text,
             token_offset,
             char_offset,
+            **kwargs,
         )
 
         annotated_extractions.extend(aligned_extractions)

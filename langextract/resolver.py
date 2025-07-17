@@ -19,8 +19,10 @@ transform the textual output of an LLM into structured data.
 """
 
 import abc
+import collections
 from collections.abc import Iterator, Mapping, Sequence
 import difflib
+import functools
 import itertools
 import json
 import operator
@@ -31,6 +33,8 @@ import yaml
 from langextract import data
 from langextract import schema
 from langextract import tokenizer
+
+_FUZZY_ALIGNMENT_MIN_THRESHOLD = 0.75
 
 
 class AbstractResolver(abc.ABC):
@@ -109,8 +113,21 @@ class AbstractResolver(abc.ABC):
       source_text: str,
       token_offset: int,
       char_offset: int | None = None,
+      enable_fuzzy_alignment: bool = True,
+      fuzzy_alignment_threshold: float = _FUZZY_ALIGNMENT_MIN_THRESHOLD,
+      accept_match_lesser: bool = True,
   ) -> Iterator[data.Extraction]:
-    """Aligns annotated extractions with the given chunk text and offset.
+    """Aligns extractions with source text, setting token/char intervals and alignment status.
+
+    Uses exact matching first (difflib), then fuzzy alignment fallback if
+    enabled.
+
+    Alignment Status Results:
+    - MATCH_EXACT: Perfect token-level match
+    - MATCH_LESSER: Partial exact match (extraction longer than matched text)
+    - MATCH_FUZZY: Best overlap window meets threshold (≥
+    fuzzy_alignment_threshold)
+    - None: No alignment found
 
     Args:
       extractions: Annotated extractions to align with the source text.
@@ -119,6 +136,12 @@ class AbstractResolver(abc.ABC):
         of the chunk.
       char_offset: The char_offset corresponding to the starting character index
         of the chunk.
+      enable_fuzzy_alignment: Whether to use fuzzy alignment when exact matching
+        fails.
+      fuzzy_alignment_threshold: Minimum token overlap ratio for fuzzy alignment
+        (0-1).
+      accept_match_lesser: Whether to accept partial exact matches (MATCH_LESSER
+        status).
 
     Yields:
       Aligned extractions with updated token intervals and alignment status.
@@ -218,6 +241,9 @@ class Resolver(AbstractResolver):
       source_text: str,
       token_offset: int,
       char_offset: int | None = None,
+      enable_fuzzy_alignment: bool = True,
+      fuzzy_alignment_threshold: float = _FUZZY_ALIGNMENT_MIN_THRESHOLD,
+      accept_match_lesser: bool = True,
   ) -> Iterator[data.Extraction]:
     """Aligns annotated extractions with source text.
 
@@ -232,6 +258,11 @@ class Resolver(AbstractResolver):
       source_text: The text chunk in which to align the extractions.
       token_offset: The starting token index of the chunk.
       char_offset: The starting character index of the chunk.
+      enable_fuzzy_alignment: Whether to enable fuzzy alignment fallback.
+      fuzzy_alignment_threshold: Minimum overlap ratio required for fuzzy
+        alignment.
+      accept_match_lesser: Whether to accept partial exact matches (MATCH_LESSER
+        status).
 
     Yields:
         Iterator on aligned extractions.
@@ -249,7 +280,13 @@ class Resolver(AbstractResolver):
 
     aligner = WordAligner()
     aligned_yaml_extractions = aligner.align_extractions(
-        extractions_group, source_text, token_offset, char_offset or 0
+        extractions_group,
+        source_text,
+        token_offset,
+        char_offset or 0,
+        enable_fuzzy_alignment=enable_fuzzy_alignment,
+        fuzzy_alignment_threshold=fuzzy_alignment_threshold,
+        accept_match_lesser=accept_match_lesser,
     )
     logging.debug(
         "Aligned extractions count: %d",
@@ -484,9 +521,9 @@ class WordAligner:
 
   def __init__(self):
     """Initialize the WordAligner with difflib SequenceMatcher."""
-    self.matcher = difflib.SequenceMatcher()
-    self.source_tokens = None
-    self.extraction_tokens = None
+    self.matcher = difflib.SequenceMatcher(autojunk=False)
+    self.source_tokens: Sequence[str] | None = None
+    self.extraction_tokens: Sequence[str] | None = None
 
   def _set_seqs(
       self,
@@ -531,24 +568,148 @@ class WordAligner:
       )
     return self.matcher.get_matching_blocks()
 
+  def _fuzzy_align_extraction(
+      self,
+      extraction: data.Extraction,
+      source_tokens: list[str],
+      tokenized_text: tokenizer.TokenizedText,
+      token_offset: int,
+      char_offset: int,
+      fuzzy_alignment_threshold: float = _FUZZY_ALIGNMENT_MIN_THRESHOLD,
+  ) -> data.Extraction | None:
+    """Fuzzy-align an extraction using difflib.SequenceMatcher on tokens.
+
+    The algorithm scans every candidate window in `source_tokens` and selects
+    the window with the highest SequenceMatcher `ratio`. It uses an efficient
+    token-count intersection as a fast pre-check to discard windows that cannot
+    meet the alignment threshold. A match is accepted when the ratio is ≥
+    `fuzzy_alignment_threshold`. This only runs on unmatched extractions, which
+    is usually a small subset of the total extractions.
+
+    Args:
+      extraction: The extraction to align.
+      source_tokens: The tokens from the source text.
+      tokenized_text: The tokenized source text.
+      token_offset: The token offset of the current chunk.
+      char_offset: The character offset of the current chunk.
+      fuzzy_alignment_threshold: The minimum ratio for a fuzzy match.
+
+    Returns:
+      The aligned data.Extraction if successful, None otherwise.
+    """
+
+    extraction_tokens = list(
+        _tokenize_with_lowercase(extraction.extraction_text)
+    )
+    # Work with lightly stemmed tokens so pluralisation doesn't block alignment
+    extraction_tokens_norm = [_normalize_token(t) for t in extraction_tokens]
+
+    if not extraction_tokens:
+      return None
+
+    logging.debug(
+        "Fuzzy aligning %r (%d tokens)",
+        extraction.extraction_text,
+        len(extraction_tokens),
+    )
+
+    best_ratio = 0.0
+    best_span: tuple[int, int] | None = None  # (start_idx, window_size)
+
+    len_e = len(extraction_tokens)
+    max_window = len(source_tokens)
+
+    extraction_counts = collections.Counter(extraction_tokens_norm)
+    min_overlap = int(len_e * fuzzy_alignment_threshold)
+
+    matcher = difflib.SequenceMatcher(autojunk=False, b=extraction_tokens_norm)
+
+    for window_size in range(len_e, max_window + 1):
+      if window_size > len(source_tokens):
+        break
+
+      # Initialize for sliding window
+      window_deque = collections.deque(source_tokens[0:window_size])
+      window_counts = collections.Counter(
+          [_normalize_token(t) for t in window_deque]
+      )
+
+      for start_idx in range(len(source_tokens) - window_size + 1):
+        # Optimization: check if enough overlapping tokens exist before expensive
+        # sequence matching. This is an upper bound on the match count.
+        if (extraction_counts & window_counts).total() >= min_overlap:
+          window_tokens_norm = [_normalize_token(t) for t in window_deque]
+          matcher.set_seq1(window_tokens_norm)
+          matches = sum(size for _, _, size in matcher.get_matching_blocks())
+          if len_e > 0:
+            ratio = matches / len_e
+          else:
+            ratio = 0.0
+          if ratio > best_ratio:
+            best_ratio = ratio
+            best_span = (start_idx, window_size)
+
+        # Slide the window to the right
+        if start_idx + window_size < len(source_tokens):
+          # Remove the leftmost token from the count
+          old_token = window_deque.popleft()
+          old_token_norm = _normalize_token(old_token)
+          window_counts[old_token_norm] -= 1
+          if window_counts[old_token_norm] == 0:
+            del window_counts[old_token_norm]
+
+          # Add the new rightmost token to the deque and count
+          new_token = source_tokens[start_idx + window_size]
+          window_deque.append(new_token)
+          new_token_norm = _normalize_token(new_token)
+          window_counts[new_token_norm] += 1
+
+    if best_span and best_ratio >= fuzzy_alignment_threshold:
+      start_idx, window_size = best_span
+
+      try:
+        extraction.token_interval = tokenizer.TokenInterval(
+            start_index=start_idx + token_offset,
+            end_index=start_idx + window_size + token_offset,
+        )
+
+        start_token = tokenized_text.tokens[start_idx]
+        end_token = tokenized_text.tokens[start_idx + window_size - 1]
+        extraction.char_interval = data.CharInterval(
+            start_pos=char_offset + start_token.char_interval.start_pos,
+            end_pos=char_offset + end_token.char_interval.end_pos,
+        )
+
+        extraction.alignment_status = data.AlignmentStatus.MATCH_FUZZY
+        return extraction
+      except IndexError:
+        logging.exception(
+            "Index error while setting intervals during fuzzy alignment."
+        )
+        return None
+
+    return None
+
   def align_extractions(
       self,
       extraction_groups: Sequence[Sequence[data.Extraction]],
       source_text: str,
       token_offset: int = 0,
       char_offset: int = 0,
-      delim: str = "|",
+      delim: str = "\u241F",  # Unicode Symbol for unit separator
+      enable_fuzzy_alignment: bool = True,
+      fuzzy_alignment_threshold: float = _FUZZY_ALIGNMENT_MIN_THRESHOLD,
+      accept_match_lesser: bool = False,
   ) -> Sequence[Sequence[data.Extraction]]:
     """Aligns extractions with their positions in the source text.
 
     This method takes a sequence of extractions and the source text, aligning
     each extraction with its corresponding position in the source text. It
-    returns a
-    sequence of extractions along with token intervals indicating the start and
-    end
-    positions of each extraction in the source text. If an extraction cannot be
-    aligned,
-    its token interval is set to None.
+    returns a sequence of extractions along with token intervals indicating the
+    start and
+    end positions of each extraction in the source text. If an extraction cannot
+    be
+    aligned, its token interval is set to None.
 
     Args:
       extraction_groups: A sequence of sequences, where each inner sequence
@@ -558,7 +719,13 @@ class WordAligner:
         intervals.
       char_offset: The offset to add to the start and end positions of the
         character intervals.
-      delim: Single token used to separate multi-token extractions.
+      delim: Token used to separate multi-token extractions.
+      enable_fuzzy_alignment: Whether to use fuzzy alignment when exact matching
+        fails.
+      fuzzy_alignment_threshold: Minimum token overlap ratio for fuzzy alignment
+        (0-1).
+      accept_match_lesser: Whether to accept partial exact matches (MATCH_LESSER
+        status).
 
     Returns:
       A sequence of extractions aligned with the source text, including token
@@ -573,11 +740,13 @@ class WordAligner:
       logging.info("No extraction groups provided; returning empty list.")
       return []
 
-    source_tokens = _tokenize_with_lowercase(source_text)
+    source_tokens = list(_tokenize_with_lowercase(source_text))
 
     delim_len = len(list(_tokenize_with_lowercase(delim)))
     if delim_len != 1:
-      raise ValueError(f"Delimiter '{delim}' must be a single token.")
+      raise ValueError(f"Delimiter {delim!r} must be a single token.")
+
+    logging.debug("Using delimiter %r for extraction alignment", delim)
 
     extraction_tokens = _tokenize_with_lowercase(
         f" {delim} ".join(
@@ -597,6 +766,14 @@ class WordAligner:
           len(group),
       )
       for extraction in group:
+        # Validate delimiter doesn't appear in extraction text
+        if delim in extraction.extraction_text:
+          raise ValueError(
+              f"Delimiter {delim!r} appears inside extraction text"
+              f" {extraction.extraction_text!r}. This would corrupt alignment"
+              " mapping."
+          )
+
         index_to_extraction_group[extraction_index] = (extraction, group_index)
         extraction_text_tokens = list(
             _tokenize_with_lowercase(extraction.extraction_text)
@@ -608,6 +785,12 @@ class WordAligner:
     ]
     tokenized_text = tokenizer.tokenize(source_text)
 
+    # Track which extractions were aligned in the exact matching phase
+    aligned_extractions = []
+    exact_matches = 0
+    lesser_matches = 0
+
+    # Exact matching phase
     for i, j, n in self._get_matching_blocks()[:-1]:
       extraction, _ = index_to_extraction_group.get(j, (None, None))
       if extraction is None:
@@ -640,13 +823,54 @@ class WordAligner:
       extraction_text_len = len(
           list(_tokenize_with_lowercase(extraction.extraction_text))
       )
-      assert (
-          extraction_text_len >= n
-      ), "Delimiter prevents blocks greater than extraction length"
+      if extraction_text_len < n:
+        raise ValueError(
+            "Delimiter prevents blocks greater than extraction length: "
+            f"extraction_text_len={extraction_text_len}, block_size={n}"
+        )
       if extraction_text_len == n:
         extraction.alignment_status = data.AlignmentStatus.MATCH_EXACT
+        exact_matches += 1
+        aligned_extractions.append(extraction)
       else:
-        extraction.alignment_status = data.AlignmentStatus.MATCH_LESSER
+        # Partial match (extraction longer than matched text)
+        if accept_match_lesser:
+          extraction.alignment_status = data.AlignmentStatus.MATCH_LESSER
+          lesser_matches += 1
+          aligned_extractions.append(extraction)
+        else:
+          # Reset intervals when not accepting lesser matches
+          extraction.token_interval = None
+          extraction.char_interval = None
+          extraction.alignment_status = None
+
+    # Collect unaligned extractions
+    unaligned_extractions = []
+    for extraction, _ in index_to_extraction_group.values():
+      if extraction not in aligned_extractions:
+        unaligned_extractions.append(extraction)
+
+    # Apply fuzzy alignment to remaining extractions
+    if enable_fuzzy_alignment and unaligned_extractions:
+      logging.debug(
+          "Starting fuzzy alignment for %d unaligned extractions",
+          len(unaligned_extractions),
+      )
+      for extraction in unaligned_extractions:
+        aligned_extraction = self._fuzzy_align_extraction(
+            extraction,
+            source_tokens,
+            tokenized_text,
+            token_offset,
+            char_offset,
+            fuzzy_alignment_threshold,
+        )
+        if aligned_extraction:
+          aligned_extractions.append(aligned_extraction)
+          logging.debug(
+              "Fuzzy alignment successful for extraction: %s",
+              extraction.extraction_text,
+          )
 
     for extraction, group_index in index_to_extraction_group.values():
       aligned_extraction_groups[group_index].append(extraction)
@@ -677,3 +901,12 @@ def _tokenize_with_lowercase(text: str) -> Iterator[str]:
     token_str = original_text[start:end]
     token_str = token_str.lower()
     yield token_str
+
+
+@functools.lru_cache(maxsize=10000)
+def _normalize_token(token: str) -> str:
+  """Lowercases and applies light pluralisation stemming."""
+  token = token.lower()
+  if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+    token = token[:-1]
+  return token

@@ -55,6 +55,9 @@ def assert_char_interval_match_source(
           f" '{extracted}' using char_interval {char_int}",
       )
 
+
+class ParserTest(parameterized.TestCase):
+
   @parameterized.named_parameters(
       dict(
           testcase_name="json_invalid_input",
@@ -1432,8 +1435,203 @@ class AlignEntitiesTest(parameterized.TestCase):
                   extraction_class="some_class",
                   extraction_text="only matched end",
                   char_interval=None,
+                  alignment_status=None,
               )
           ]],
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_success",
+          # Tests fuzzy alignment alongside exact matching. Shows different alignment statuses:
+          # "heart problems" gets fuzzy match, "severe heart problems complications" gets lesser match.
+          # Demonstrates both fuzzy and lesser matching working with 75% threshold.
+          extractions=[
+              [
+                  data.Extraction(
+                      extraction_class="condition",
+                      extraction_text="heart problems",
+                  )
+              ],
+              [
+                  data.Extraction(
+                      extraction_class="condition",
+                      extraction_text="severe heart problems complications",
+                  )
+              ],
+          ],
+          source_text="Patient has severe heart problems today.",
+          expected_output=[
+              [
+                  data.Extraction(
+                      extraction_class="condition",
+                      extraction_text="heart problems",
+                      token_interval=tokenizer.TokenInterval(
+                          start_index=3, end_index=5
+                      ),
+                      char_interval=data.CharInterval(start_pos=19, end_pos=33),
+                      alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+                  )
+              ],
+              [
+                  data.Extraction(
+                      extraction_class="condition",
+                      extraction_text="severe heart problems complications",
+                      token_interval=tokenizer.TokenInterval(
+                          start_index=2, end_index=5
+                      ),
+                      char_interval=data.CharInterval(start_pos=12, end_pos=33),
+                      alignment_status=data.AlignmentStatus.MATCH_LESSER,
+                  )
+              ],
+          ],
+          enable_fuzzy_alignment=True,
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_below_threshold",
+          # Tests fuzzy alignment failure when overlap ratio < _FUZZY_ALIGNMENT_MIN_THRESHOLD (75%).
+          # No tokens overlap between "completely different medicine" and "Patient takes aspirin daily."
+          extractions=[
+              [
+                  data.Extraction(
+                      extraction_class="medication",
+                      extraction_text="completely different medicine",
+                  )
+              ],
+          ],
+          source_text="Patient takes aspirin daily.",
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="medication",
+                  extraction_text="completely different medicine",
+                  char_interval=None,
+                  alignment_status=None,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
+      ),
+      dict(
+          testcase_name="accept_match_lesser_disabled",
+          # Tests accept_match_lesser=False with fuzzy fallback.
+          extractions=[
+              [
+                  data.Extraction(
+                      extraction_class="condition",
+                      extraction_text="patient heart problems today",
+                  )
+              ],
+          ],
+          source_text="Patient has heart problems today.",
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="condition",
+                  extraction_text="patient heart problems today",
+                  token_interval=tokenizer.TokenInterval(
+                      start_index=0, end_index=5
+                  ),
+                  char_interval=data.CharInterval(start_pos=0, end_pos=32),
+                  alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
+          accept_match_lesser=False,
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_subset_window",
+          # Extraction is a subset of a longer source clause; ensures extra tokens do not penalise score.
+          extractions=[[
+              data.Extraction(
+                  extraction_class="tendon",
+                  extraction_text="The iliopsoas tendon is intact",
+              )
+          ]],
+          source_text=(
+              "The iliopsoas and proximal hamstring tendons are intact."
+          ),
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="tendon",
+                  extraction_text="The iliopsoas tendon is intact",
+                  token_interval=tokenizer.TokenInterval(
+                      start_index=0, end_index=8
+                  ),
+                  char_interval=data.CharInterval(start_pos=0, end_pos=55),
+                  alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
+          accept_match_lesser=False,
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_with_reordered_words",
+          # Tests fuzzy alignment's ability to handle reordered words in the extraction.
+          extractions=[[
+              data.Extraction(
+                  extraction_class="condition",
+                  extraction_text="problems heart",  # Reordered words
+                  char_interval=data.CharInterval(start_pos=12, end_pos=33),
+                  alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+              )
+          ]],
+          source_text="Patient has severe heart problems today.",
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="condition",
+                  extraction_text="problems heart",
+                  # The best matching window in the source is "severe heart problems"
+                  token_interval=tokenizer.TokenInterval(
+                      start_index=2, end_index=5
+                  ),
+                  char_interval=data.CharInterval(start_pos=12, end_pos=33),
+                  alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_fails_low_ratio",
+          # An extraction that partially overlaps but is below the fuzzy threshold should not be aligned.
+          extractions=[[
+              data.Extraction(
+                  extraction_class="symptom",
+                  extraction_text="headache and fever",
+              )
+          ]],
+          source_text="Patient reports back pain and a fever.",
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="symptom",
+                  extraction_text="headache and fever",
+                  char_interval=None,
+                  alignment_status=None,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
+      ),
+      dict(
+          testcase_name="fuzzy_alignment_partial_overlap_success",
+          # An extraction where the number of matched tokens divided by total extraction tokens
+          # is >= the threshold (3/4 = 0.75).
+          extractions=[[
+              data.Extraction(
+                  extraction_class="finding",
+                  extraction_text="mild degenerative disc disease",
+              )
+          ]],
+          source_text=(
+              "Findings consistent with degenerative disc disease at L5-S1."
+          ),
+          expected_output=[[
+              data.Extraction(
+                  extraction_class="finding",
+                  extraction_text="mild degenerative disc disease",
+                  # The best window found is "degenerative disc disease"
+                  token_interval=tokenizer.TokenInterval(
+                      start_index=3, end_index=6
+                  ),
+                  char_interval=data.CharInterval(start_pos=20, end_pos=50),
+                  alignment_status=data.AlignmentStatus.MATCH_FUZZY,
+              )
+          ]],
+          enable_fuzzy_alignment=True,
       ),
   )
   def test_extraction_alignment(
@@ -1441,13 +1639,20 @@ class AlignEntitiesTest(parameterized.TestCase):
       extractions: Sequence[Sequence[data.Extraction]],
       source_text: str,
       expected_output: Sequence[Sequence[data.Extraction]] | ValueError,
+      enable_fuzzy_alignment: bool = False,
+      accept_match_lesser: bool = True,
   ):
     if expected_output is ValueError:
       with self.assertRaises(ValueError):
-        self.aligner.align_extractions(extractions, source_text)
+        self.aligner.align_extractions(
+            extractions, source_text, enable_fuzzy_alignment=False
+        )
     else:
       aligned_extraction_groups = self.aligner.align_extractions(
-          extractions, source_text
+          extractions,
+          source_text,
+          enable_fuzzy_alignment=enable_fuzzy_alignment,
+          accept_match_lesser=accept_match_lesser,
       )
       flattened_extractions = []
       for group in aligned_extraction_groups:
@@ -1636,7 +1841,9 @@ class ResolverTest(parameterized.TestCase):
 
   def test_resolve_empty_yaml(self):
     test_input = "```json\n```"
-    actual = self.default_resolver.resolve(test_input, suppress_parse_errors=True)
+    actual = self.default_resolver.resolve(
+        test_input, suppress_parse_errors=True
+    )
     self.assertEmpty(actual)
 
   def test_resolve_empty_yaml_without_suppress_parse_errors(self):
@@ -1682,6 +1889,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=0,
+            enable_fuzzy_alignment=False,
         )
     )
 
@@ -1732,6 +1940,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=char_offset,
+            enable_fuzzy_alignment=False,
         )
     )
 
@@ -1758,6 +1967,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=0,
+            enable_fuzzy_alignment=False,
         )
     )
 
@@ -1800,6 +2010,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=0,
+            enable_fuzzy_alignment=False,
         )
     )
 
@@ -1845,6 +2056,7 @@ class ResolverTest(parameterized.TestCase):
               annotated_extractions,
               chunk_text,
               token_offset,
+              enable_fuzzy_alignment=False,
           )
       )
 
@@ -1885,6 +2097,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=0,
+            enable_fuzzy_alignment=False,
         )
     )
     self.assertLen(aligned_extractions, 2)
@@ -1910,6 +2123,7 @@ class ResolverTest(parameterized.TestCase):
             source_text=chunk_text,
             token_offset=token_offset,
             char_offset=0,
+            enable_fuzzy_alignment=False,
         )
     )
 
