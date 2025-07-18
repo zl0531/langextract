@@ -6,7 +6,6 @@
 
 # LangExtract
 
-<!-- TODO: Set up test workflow (ci.yaml) and PyPI badge (badge.fury.io) for the new repository -->
 [![PyPI version](https://badge.fury.io/py/langextract.svg)](https://badge.fury.io/py/langextract)
 [![GitHub stars](https://img.shields.io/github/stars/google/langextract.svg?style=social&label=Star)](https://github.com/google/langextract)
 ![Tests](https://github.com/google/langextract/actions/workflows/ci.yaml/badge.svg)
@@ -290,6 +289,12 @@ pip install -e ".[test]"
 
 # Run all tests
 pytest tests
+```
+
+Or reproduce the full CI matrix locally with tox:
+
+```bash
+tox  # runs pylint + pytest on Python 3.10 and 3.11
 ```
 
 ## Disclaimer

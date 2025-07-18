@@ -21,8 +21,8 @@ name = "langextract"
 version = "0.1.0"
 description = "LangExtract: A library for extracting structured data from language models"
 readme = "README.md"
-requires-python = ">=3.8"
-license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+license = "Apache-2.0"
 authors = [
     {name = "Akshay Goel", email = "goelak@google.com"}
 ]
@@ -51,7 +51,8 @@ dev = [
     "black>=23.7.0",
     "pylint>=2.17.5",
     "pytest>=7.4.0",
-    "pytype>=2024.10.11"
+    "pytype>=2024.10.11",
+    "tox>=4.0.0",
 ]
 test = [
     "pytest>=7.4.0",
@@ -60,6 +61,16 @@ test = [
 
 [tool.setuptools]
 packages = ["langextract"]
+include-package-data = false
+
+[tool.setuptools.exclude-package-data]
+"*" = [
+    "docs*",
+    "tests*",
+    "kokoro*",
+    "*.gif",
+    "*.svg",
+]
 
 [tool.pytest]
 testpaths = ["tests"]
