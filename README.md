@@ -1,12 +1,12 @@
 <p align="center">
   <a href="https://github.com/google/langextract">
-    <img src="docs/_static/logo.svg" alt="LangExtract Logo" width="128" />
+    <img src="https://raw.githubusercontent.com/google/langextract/main/docs/_static/logo.svg" alt="LangExtract Logo" width="128" />
   </a>
 </p>
 
 # LangExtract
 
-[![PyPI version](https://badge.fury.io/py/langextract.svg)](https://badge.fury.io/py/langextract)
+[![PyPI version](https://img.shields.io/pypi/v/langextract.svg)](https://pypi.org/project/langextract/)
 [![GitHub stars](https://img.shields.io/github/stars/google/langextract.svg?style=social&label=Star)](https://github.com/google/langextract)
 ![Tests](https://github.com/google/langextract/actions/workflows/ci.yaml/badge.svg)
 
@@ -121,7 +121,7 @@ with open("visualization.html", "w") as f:
 
 This creates an animated and interactive HTML file:
 
-![Romeo and Juliet Basic Visualization ](docs/_static/romeo_juliet_basic.gif)
+![Romeo and Juliet Basic Visualization ](https://raw.githubusercontent.com/google/langextract/main/docs/_static/romeo_juliet_basic.gif)
 
 > **Note on LLM Knowledge Utilization:** This example demonstrates extractions that stay close to the text evidence - extracting "longing" for Lady Juliet's emotional state and identifying "yearning" from "gazed longingly at the stars." The task could be modified to generate attributes that draw more heavily from the LLM's world knowledge (e.g., adding `"identity": "Capulet family daughter"` or `"literary_context": "tragic heroine"`). The balance between text-evidence and knowledge-inference is controlled by your prompt instructions and example attributes.
 
@@ -142,7 +142,7 @@ result = lx.extract(
 )
 ```
 
-This approach can extract hundreds of entities from full novels while maintaining high accuracy. The interactive visualization seamlessly handles large result sets, making it easy to explore hundreds of entities from the output JSONL file. **[See the full *Romeo and Juliet* extraction example →](docs/examples/longer_text_example.md)** for detailed results and performance insights.
+This approach can extract hundreds of entities from full novels while maintaining high accuracy. The interactive visualization seamlessly handles large result sets, making it easy to explore hundreds of entities from the output JSONL file. **[See the full *Romeo and Juliet* extraction example →](https://github.com/google/langextract/blob/main/docs/examples/longer_text_example.md)** for detailed results and performance insights.
 
 ## Installation
 
@@ -252,7 +252,7 @@ Additional examples of LangExtract in action:
 
 LangExtract can process complete documents directly from URLs. This example demonstrates extraction from the full text of *Romeo and Juliet* from Project Gutenberg (147,843 characters), showing parallel processing, sequential extraction passes, and performance optimization for long document processing.
 
-**[View *Romeo and Juliet* Full Text Example →](docs/examples/longer_text_example.md)**
+**[View *Romeo and Juliet* Full Text Example →](https://github.com/google/langextract/blob/main/docs/examples/longer_text_example.md)**
 
 ### Medication Extraction
 
@@ -260,7 +260,7 @@ LangExtract can process complete documents directly from URLs. This example demo
 
 LangExtract excels at extracting structured medical information from clinical text. These examples demonstrate both basic entity recognition (medication names, dosages, routes) and relationship extraction (connecting medications to their attributes), showing LangExtract's effectiveness for healthcare applications.
 
-**[View Medication Examples →](docs/examples/medication_examples.md)**
+**[View Medication Examples →](https://github.com/google/langextract/blob/main/docs/examples/medication_examples.md)**
 
 ### Radiology Report Structuring: RadExtract
 
@@ -270,7 +270,7 @@ Explore RadExtract, a live interactive demo on HuggingFace Spaces that shows how
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started
+Contributions are welcome! See [CONTRIBUTING.md](https://github.com/google/langextract/blob/main/CONTRIBUTING.md) to get started
 with development, testing, and pull requests. You must sign a
 [Contributor License Agreement](https://cla.developers.google.com/about)
 before submitting patches.
@@ -301,7 +301,7 @@ tox  # runs pylint + pytest on Python 3.10 and 3.11
 
 This is not an officially supported Google product. If you use
 LangExtract in production or publications, please cite accordingly and
-acknowledge usage. Use is subject to the [Apache 2.0 License](LICENSE).
+acknowledge usage. Use is subject to the [Apache 2.0 License](https://github.com/google/langextract/blob/main/LICENSE).
 For health-related applications, use of LangExtract is also subject to the
 [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms).
 
